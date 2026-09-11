@@ -4,7 +4,7 @@ import {refinePortraitMaterial} from './character-lighting.js';
 import {downloadModel} from './model-download.js';
 const portraits=new Map();
 // A new asset revision avoids reusing partial responses cached by older builds.
-const modelRevision='8.1.1';
+const modelRevision='1.0.0';
 const loader=new GLTFLoader();
 // Only the four content-addressed character images are shared. Retaining GLB
 // response buffers in Three's global cache would undo the memory saving.

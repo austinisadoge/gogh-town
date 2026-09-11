@@ -1,0 +1,16 @@
+# 這個遊戲的程式碼用「從網域根目錄開始」的絕對路徑（/vendor、/assets），
+# 所以必須發布在網域根目錄，不能放在子路徑底下。
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# GLB 模型與貼圖體積大又不會變動，讓瀏覽器長期快取，第二次進來就不用重抓 36MB
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/vendor/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

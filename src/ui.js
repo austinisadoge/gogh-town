@@ -111,7 +111,7 @@ export class GameUI{
   $('volume').value=this.settings.volume;$('sensitivity').value=this.settings.sensitivity;text('volume-output',`${Math.round(this.settings.volume*100)}%`);text('sensitivity-output',`${Number(this.settings.sensitivity).toFixed(2)}×`);
   document.querySelectorAll('[data-graphics]').forEach(button=>{const selected=button.dataset.graphics===this.settings.graphics;button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
  }
- changeSettings(next){Object.assign(this.settings,next);this.config.settings={...this.settings};this.syncSettings();try{localStorage.setItem('vgs-settings',JSON.stringify(this.settings));}catch{}this.options.onSettings?.({...this.settings});}
+ changeSettings(next){Object.assign(this.settings,next);this.config.settings={...this.settings};this.syncSettings();try{localStorage.setItem('gogh-town-settings',JSON.stringify(this.settings));}catch{}this.options.onSettings?.({...this.settings});}
  launch(restart=false){if(!this.isReady)return;this.config.settings={...this.settings};const callback=restart?(this.options.onRestart||this.options.onStart):this.options.onStart;try{const result=callback?.({...this.config,mode:'tdm',attachments:{...this.config.attachments},settings:{...this.settings}});result?.catch?.(error=>this.showError(error));}catch(error){this.showError(error);}}
  async ready(){
   const images=[...$('main-menu').querySelectorAll('img[src]')];

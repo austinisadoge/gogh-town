@@ -6,6 +6,7 @@
 !/LICENSE
 !/THIRD_PARTY_NOTICES.md
 !/PROVENANCE.md
+!/netlify.toml
 !/package.json
 !/package-lock.json
 !/server.mjs
