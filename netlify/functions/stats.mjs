@@ -7,11 +7,21 @@ import {getStore} from '@netlify/blobs';
  *
  * playerId 由瀏覽器自己產生後存在 localStorage，伺服器只拿它去重，
  * 不記 IP、不記任何可以認出是誰的資料。
+ *
+ * 🔴 為什麼不用「讀出數字 +1 再寫回去」：
+ * Netlify Blobs 的 onlyIfMatch 在「依序」寫入時正常，但在「同時」寫入時
+ * 並非原子操作 —— 實測十個請求帶同一個 etag 併發寫入，有四個都回報成功。
+ * 所以任何形式的讀改寫都會掉資料，重試再多次也沒用。
+ *
+ * 改成：每一場寫一筆 key 不重複的紀錄（不重複就不會互相蓋掉），
+ * 數量用數 key 的方式算出來。計數結果只當快取，掉了就重算。
  */
 
-const COUNTERS = 'counters';
-const COOLDOWN_MS = 20_000;   // 同一個人 20 秒內連開，只算一場（避免重整洗數字）
-const MAX_RETRY = 12;         // 樂觀鎖撞車時的重試次數
+const PLAY = 'play/';        // 一場一筆，key 不重複
+const PLAYER = 'player/';    // 一人一筆，key 就是玩家 ID
+const CACHE = 'counters';    // 純快取，可以掉
+const CACHE_MS = 30_000;     // GET 多久之內直接用快取
+const COOLDOWN_MS = 20_000;  // 同一個人 20 秒內重開只算一場
 
 const store = () => getStore({name: 'play-stats', consistency: 'strong'});
 
@@ -21,43 +31,32 @@ const json = (body, status = 200) =>
     headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'},
   });
 
-async function readCounters(s) {
-  const res = await s.getWithMetadata(COUNTERS, {type: 'json'});
-  return {value: res?.data ?? {players: 0, plays: 0}, etag: res?.etag};
+async function countKeys(s, prefix) {
+  let total = 0;
+  for await (const page of s.list({prefix, paginate: true})) total += page.blobs.length;
+  return total;
 }
 
-/** 先比對 etag 再寫入，同一瞬間有別人寫過就重讀重算，數字才不會被蓋掉。
- *
- * 每次重試前隨機等一小段時間。少了這段，同時進來的請求會一起重讀、
- * 一起重寫、再一起撞掉，重試幾次都沒用 —— 錯開時間才解得開。
- */
-async function bump(s, {newPlayer}) {
-  for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
-    if (attempt) {
-      const backoff = Math.min(400, 15 * 2 ** attempt);
-      await new Promise(r => setTimeout(r, backoff * (0.5 + Math.random())));
-    }
-    const {value, etag} = await readCounters(s);
-    const next = {
-      players: (value.players || 0) + (newPlayer ? 1 : 0),
-      plays: (value.plays || 0) + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    const opts = etag ? {onlyIfMatch: etag} : {onlyIfNew: true};
-    const {modified} = await s.setJSON(COUNTERS, next, opts);
-    if (modified) return {...next, counted: true};
-  }
-  // 真的擠不進去就照實回報沒記到，不要假裝成功
-  const {value} = await readCounters(s);
-  return {players: value.players || 0, plays: value.plays || 0, counted: false};
+/** 直接數 key 得出真實數字，順便更新快取。 */
+async function recount(s) {
+  const [players, plays] = await Promise.all([countKeys(s, PLAYER), countKeys(s, PLAY)]);
+  const value = {players, plays, at: Date.now()};
+  await s.setJSON(CACHE, value).catch(() => {});  // 快取寫失敗不影響正確性
+  return value;
+}
+
+async function cachedCounts(s) {
+  const cached = await s.get(CACHE, {type: 'json'}).catch(() => null);
+  if (cached && Date.now() - (cached.at || 0) < CACHE_MS) return cached;
+  return recount(s);
 }
 
 export default async (request) => {
   const s = store();
 
   if (request.method === 'GET') {
-    const {value} = await readCounters(s);
-    return json({players: value.players || 0, plays: value.plays || 0});
+    const c = await cachedCounts(s);
+    return json({players: c.players || 0, plays: c.plays || 0});
   }
 
   if (request.method !== 'POST') return json({error: '只接受 GET 與 POST'}, 405);
@@ -69,19 +68,23 @@ export default async (request) => {
   if (id.length < 12) return json({error: 'playerId 格式不對'}, 400);
 
   const now = Date.now();
-  const seenKey = `player/${id}`;
-  const seen = await s.get(seenKey, {type: 'json'}).catch(() => null);
+  const seen = await s.get(PLAYER + id, {type: 'json'}).catch(() => null);
 
-  // 冷卻期間內不計數，但還是回傳目前的數字讓畫面能更新
+  // 冷卻期間內不計數，但還是回傳目前數字讓畫面能更新
   if (seen && now - (seen.last || 0) < COOLDOWN_MS) {
-    const {value} = await readCounters(s);
-    return json({players: value.players || 0, plays: value.plays || 0, counted: false});
+    const c = await cachedCounts(s);
+    return json({players: c.players || 0, plays: c.plays || 0, counted: false});
   }
 
-  await s.setJSON(seenKey, {last: now, matches: (seen?.matches || 0) + 1});
-  const next = await bump(s, {newPlayer: !seen});
-  return json({players: next.players, plays: next.plays, counted: next.counted});
+  // key 各自獨立，併發寫入不會互相覆蓋
+  const ticket = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  await Promise.all([
+    s.setJSON(PLAY + ticket, {at: now}),
+    s.setJSON(PLAYER + id, {last: now, matches: (seen?.matches || 0) + 1}),
+  ]);
+
+  const c = await recount(s);   // 開局當下要看到正確數字，所以重數一次
+  return json({players: c.players || 0, plays: c.plays || 0, counted: true});
 };
 
-// Netlify v2 函式可以直接指定網址，不必另外寫轉址規則
 export const config = {path: '/api/stats'};
