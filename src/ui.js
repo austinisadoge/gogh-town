@@ -4,6 +4,7 @@ import {getArtistLoadout} from './artist-loadout.js';
 import {getArtistTag,tagDataURI} from './art-tags.js';
 import {getArtistTaunt} from './artist-taunts.js';
 import {teamLogoSVG} from './team-logos.js';
+import {createPlayStats} from './play-stats.js';
 
 const $=id=>document.getElementById(id);
 const WEAPON_CLASS={rifle:'突擊步槍',smg:'衝鋒槍',shotgun:'霰彈槍',sniper:'狙擊步槍',pistol:'手槍'};
@@ -49,6 +50,7 @@ export class GameUI{
   this.config={mode:'tdm',team:0,role:'vanguard',weapon:'rifle',attachments:{optic:'iron',barrel:'standard'},settings:{...this.settings}};
   this.state={};this.screen='menu';this.isReady=false;this.pointerLocked=false;this.dead=false;this.listeners=[];this.timers=new Map();this.killFeed=[];this.avatarSignature='';this.scoreboardSignature='';this.killerSignature='';
   this.bindEvents();this.renderAbilities();this.syncConfig();this.syncSettings();
+  this.playStats=createPlayStats($('play-stats'));this.playStats.load();
  }
  listen(target,event,handler){target?.addEventListener(event,handler);this.listeners.push([target,event,handler]);}
  bindEvents(){
@@ -112,7 +114,7 @@ export class GameUI{
   document.querySelectorAll('[data-graphics]').forEach(button=>{const selected=button.dataset.graphics===this.settings.graphics;button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
  }
  changeSettings(next){Object.assign(this.settings,next);this.config.settings={...this.settings};this.syncSettings();try{localStorage.setItem('gogh-town-settings',JSON.stringify(this.settings));}catch{}this.options.onSettings?.({...this.settings});}
- launch(restart=false){if(!this.isReady)return;this.config.settings={...this.settings};const callback=restart?(this.options.onRestart||this.options.onStart):this.options.onStart;try{const result=callback?.({...this.config,mode:'tdm',attachments:{...this.config.attachments},settings:{...this.settings}});result?.catch?.(error=>this.showError(error));}catch(error){this.showError(error);}}
+ launch(restart=false){if(!this.isReady)return;this.playStats?.recordMatch();this.config.settings={...this.settings};const callback=restart?(this.options.onRestart||this.options.onStart):this.options.onStart;try{const result=callback?.({...this.config,mode:'tdm',attachments:{...this.config.attachments},settings:{...this.settings}});result?.catch?.(error=>this.showError(error));}catch(error){this.showError(error);}}
  async ready(){
   const images=[...$('main-menu').querySelectorAll('img[src]')];
   await Promise.allSettled(images.map(image=>image.decode()));

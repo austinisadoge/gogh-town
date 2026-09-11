@@ -11,6 +11,7 @@
     "optimize:characters": "node tools/optimize-character-assets.mjs"
   },
   "dependencies": {
+    "@netlify/blobs": "^11.0.3",
     "three": "0.170.0"
   },
   "description": "梵谷小鎮大作戰：十二位畫家、兩支隊伍，在瀏覽器裡打一場六對六的顏料戰。",

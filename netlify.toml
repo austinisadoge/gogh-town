@@ -3,6 +3,8 @@
 [build]
   command = "npm run build"
   publish = "dist"
+  # 函式不放進 dist，Netlify 會另外打包這個資料夾
+  functions = "netlify/functions"
 
 # GLB 模型與貼圖體積大又不會變動，讓瀏覽器長期快取，第二次進來就不用重抓 36MB
 [[headers]]
