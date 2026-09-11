@@ -11,7 +11,7 @@ import {getStore} from '@netlify/blobs';
 
 const COUNTERS = 'counters';
 const COOLDOWN_MS = 20_000;   // 同一個人 20 秒內連開，只算一場（避免重整洗數字）
-const MAX_RETRY = 5;          // 樂觀鎖撞車時的重試次數
+const MAX_RETRY = 12;         // 樂觀鎖撞車時的重試次數
 
 const store = () => getStore({name: 'play-stats', consistency: 'strong'});
 
@@ -26,9 +26,17 @@ async function readCounters(s) {
   return {value: res?.data ?? {players: 0, plays: 0}, etag: res?.etag};
 }
 
-/** 先比對 etag 再寫入，同一瞬間有別人寫過就重讀重算，數字才不會被蓋掉。 */
+/** 先比對 etag 再寫入，同一瞬間有別人寫過就重讀重算，數字才不會被蓋掉。
+ *
+ * 每次重試前隨機等一小段時間。少了這段，同時進來的請求會一起重讀、
+ * 一起重寫、再一起撞掉，重試幾次都沒用 —— 錯開時間才解得開。
+ */
 async function bump(s, {newPlayer}) {
   for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
+    if (attempt) {
+      const backoff = Math.min(400, 15 * 2 ** attempt);
+      await new Promise(r => setTimeout(r, backoff * (0.5 + Math.random())));
+    }
     const {value, etag} = await readCounters(s);
     const next = {
       players: (value.players || 0) + (newPlayer ? 1 : 0),
@@ -37,10 +45,11 @@ async function bump(s, {newPlayer}) {
     };
     const opts = etag ? {onlyIfMatch: etag} : {onlyIfNew: true};
     const {modified} = await s.setJSON(COUNTERS, next, opts);
-    if (modified) return next;
+    if (modified) return {...next, counted: true};
   }
-  // 重試都撞掉的話，回報目前讀到的值，不要假裝寫成功
-  return (await readCounters(s)).value;
+  // 真的擠不進去就照實回報沒記到，不要假裝成功
+  const {value} = await readCounters(s);
+  return {players: value.players || 0, plays: value.plays || 0, counted: false};
 }
 
 export default async (request) => {
@@ -71,7 +80,7 @@ export default async (request) => {
 
   await s.setJSON(seenKey, {last: now, matches: (seen?.matches || 0) + 1});
   const next = await bump(s, {newPlayer: !seen});
-  return json({players: next.players, plays: next.plays, counted: true});
+  return json({players: next.players, plays: next.plays, counted: next.counted});
 };
 
 // Netlify v2 函式可以直接指定網址，不必另外寫轉址規則
